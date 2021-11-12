@@ -1,0 +1,334 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import math
+import time
+
+import numpy as np
+import tensorflow as tf
+
+import data_utils
+import s2s_model
+
+import time
+import telepot
+from telepot.loop import MessageLoop
+from telepot.namedtuple import InlineKeyboardMarkup, InlineKeyboardButton
+
+
+import logging
+
+from telegram.ext import Updater, CommandHandler, MessageHandler
+from telegram.ext import Filters
+
+import mysql.connector
+
+tf.app.flags.DEFINE_float(
+    'learning_rate',
+    0.0003,
+    '學習率'
+)
+tf.app.flags.DEFINE_float(
+    'max_gradient_norm',
+    5.0,
+    '梯度最大閾值'
+)
+tf.app.flags.DEFINE_float(
+    'dropout',
+    1.0,
+    '每層輸出DROPOUT的大小'
+)
+tf.app.flags.DEFINE_integer(
+    'batch_size',
+    64,
+    '批量梯度下降的批量大小'
+)
+tf.app.flags.DEFINE_integer(
+    'size',
+    512,
+    'LSTM每層神經元數量'
+)
+tf.app.flags.DEFINE_integer(
+    'num_layers',
+    2,
+    'LSTM的層數'
+)
+tf.app.flags.DEFINE_integer(
+    'num_epoch',
+    5,
+    '訓練幾輪'
+)
+tf.app.flags.DEFINE_integer(
+    'num_samples',
+    512,
+    '分批softmax的樣本量'
+)
+tf.app.flags.DEFINE_integer(
+    'num_per_epoch',
+    10000,
+    '每輪訓練多少隨機樣本'
+)
+tf.app.flags.DEFINE_string(
+    'buckets_dir',
+    './bucket_dbs',
+    'sqlite3數據庫所在文件夾'
+)
+tf.app.flags.DEFINE_string(
+    'model_dir',
+    './model',
+    '模型保存的目錄'
+)
+tf.app.flags.DEFINE_string(
+    'model_name',
+    'model',
+    '模型保存的名稱'
+)
+tf.app.flags.DEFINE_boolean(
+    'use_fp16',
+    False,
+    '是否使用16位浮點數（默認32位）'
+)
+tf.app.flags.DEFINE_integer(
+    'bleu',
+    -1,
+    '是否測試bleu'
+)
+tf.app.flags.DEFINE_boolean(
+    'test',
+    False,
+    '是否在測試'
+)
+
+FLAGS = tf.app.flags.FLAGS
+buckets = data_utils.buckets
+
+def create_model(session, forward_only):
+    """建立模型"""
+    dtype = tf.float16 if FLAGS.use_fp16 else tf.float32
+    model = s2s_model.S2SModel(
+        data_utils.dim,
+        data_utils.dim,
+        buckets,
+        FLAGS.size,
+        FLAGS.dropout,
+        FLAGS.num_layers,
+        FLAGS.max_gradient_norm,
+        FLAGS.batch_size,
+        FLAGS.learning_rate,
+        FLAGS.num_samples,
+        forward_only,
+        dtype
+    )
+    return model
+
+def train():
+    """訓練模型"""
+    # 準備數據
+    print("train mode")
+    print('準備數據')
+    if not os.path.exists(FLAGS.model_dir):
+        os.makedirs(FLAGS.model_dir)
+    bucket_dbs = data_utils.read_bucket_dbs(FLAGS.buckets_dir)
+    bucket_sizes = []
+    for i in range(len(buckets)):
+        bucket_size = bucket_dbs[i].size
+        bucket_sizes.append(bucket_size)
+        print('bucket {} 中有數據 {} 條'.format(i, bucket_size))
+    total_size = sum(bucket_sizes)
+    print('共有數據 {} 條'.format(total_size))
+    # 開始建模與訓練
+    with tf.Session() as sess:
+        #　構建模型
+        model = create_model(sess, False)
+        # 初始化變量
+        sess.run(tf.initialize_all_variables())
+        ckpt = tf.train.get_checkpoint_state(FLAGS.model_dir)
+        #print("ckpt path : ", ckpt.model_checkpoint_path)
+        if ckpt != None:
+            print("load old model : ", ckpt.model_checkpoint_path)
+            model.saver.restore(sess, ckpt.model_checkpoint_path)
+        else:
+            print("not exist old model")
+        buckets_scale = [
+            sum(bucket_sizes[:i + 1]) / total_size
+            for i in range(len(bucket_sizes))
+        ]
+        # 開始訓練
+        metrics = '  '.join([
+            '\r[{}]',
+            '{:.1f}%',
+            '{}/{}',
+            'loss={:.3f}',
+            '{}/{}'
+        ])
+        bars_max = 20
+        for epoch_index in range(1, FLAGS.num_epoch + 1):
+            print('Epoch {}:'.format(epoch_index))
+            time_start = time.time()
+            epoch_trained = 0
+            batch_loss = []
+            while True:
+                # 選擇一個要訓練的bucket
+                random_number = np.random.random_sample()
+                bucket_id = min([
+                    i for i in range(len(buckets_scale))
+                    if buckets_scale[i] > random_number
+                ])
+                data, data_in = model.get_batch_data(
+                    bucket_dbs,
+                    bucket_id
+                )
+                encoder_inputs, decoder_inputs, decoder_weights = model.get_batch(
+                    bucket_dbs,
+                    bucket_id,
+                    data
+                )
+                _, step_loss, output = model.step(
+                    sess,
+                    encoder_inputs,
+                    decoder_inputs,
+                    decoder_weights,
+                    bucket_id,
+                    False
+                )
+                epoch_trained += FLAGS.batch_size
+                batch_loss.append(step_loss)
+                time_now = time.time()
+                time_spend = time_now - time_start
+                time_estimate = time_spend / (epoch_trained / FLAGS.num_per_epoch)
+                percent = min(100, epoch_trained / FLAGS.num_per_epoch) * 100
+                bars = math.floor(percent / 100 * bars_max)
+                sys.stdout.write(metrics.format(
+                    '=' * bars + '-' * (bars_max - bars),
+                    percent,
+                    epoch_trained, FLAGS.num_per_epoch,
+                    np.mean(batch_loss),
+                    data_utils.time(time_spend), data_utils.time(time_estimate)
+                ))
+                sys.stdout.flush()
+                if epoch_trained >= FLAGS.num_per_epoch:
+                    model.saver.save(sess, os.path.join(FLAGS.model_dir, FLAGS.model_name), global_step=epoch_index)
+                    break
+            print('\n')
+
+        #if not os.path.exists(FLAGS.model_dir):
+        #    os.makedirs(FLAGS.model_dir)
+        #model.saver.save(sess, os.path.join(FLAGS.model_dir, FLAGS.model_name))
+
+
+
+
+
+def test():
+    print("test mode")
+    class TestBucket(object):
+        def __init__(self, sentence):
+            self.sentence = sentence
+        def random(self):
+            return sentence, ''
+    with tf.Session() as sess:
+        #　構建模型
+        model = create_model(sess, True)
+        model.batch_size = 1
+        # 初始化變量
+        sess.run(tf.initialize_all_variables())
+        
+        ckpt =tf.train.get_checkpoint_state(FLAGS.model_dir)
+        if ckpt == None or ckpt.model_checkpoint_path == None:
+            print('restore model fail')
+            return 
+
+        print('restore model file %s' % ckpt.model_checkpoint_path)
+        print(ckpt.model_checkpoint_path)
+        
+        model.saver.restore(sess,ckpt.model_checkpoint_path)
+        print("Input 'exit()' to exit test mode!")
+        sys.stdout.write("me > ")
+        sys.stdout.flush()
+        sentence = sys.stdin.readline()
+        if "exit()" in sentence:
+            sentence = False
+        while sentence:
+            bucket_id = min([
+                b for b in range(len(buckets))
+                if buckets[b][0] > len(sentence)
+            ])
+            data, _ = model.get_batch_data(
+                {bucket_id: TestBucket(sentence)},
+                bucket_id
+            )
+            encoder_inputs, decoder_inputs, decoder_weights = model.get_batch(
+                {bucket_id: TestBucket(sentence)},
+                bucket_id,
+                data
+            )
+            _, _, output_logits = model.step(
+                sess,
+                encoder_inputs,
+                decoder_inputs,
+                decoder_weights,
+                bucket_id,
+                True
+            )
+            outputs = [int(np.argmax(logit, axis=1)) for logit in output_logits]
+            ret = data_utils.indice_sentence(outputs)
+            print("AI >", ret)
+            print("me > ", end="")
+            sys.stdout.flush()
+            sentence = sys.stdin.readline()
+            
+            if "exit()" in sentence:
+                break
+
+#play funvtion------------------------------------------------------------------------------
+
+def play():
+    
+    #rule------------------------------------------------------------------------------
+  
+
+    def start(update, context):
+        """Send a message when the command /start is issued."""
+        update.message.reply_text('Hi!')
+
+
+   
+    def handle_message(update,context):
+        update.message.reply_text(f"you said {update.message.text}")
+
+
+
+
+    #執行bot------------------------------------------------------------------------------
+
+    updater = Updater("2142626601:AAGI4thiimWFzT4P6ynSfAJbjwDBU2UMcSI", use_context = True)
+
+
+    dp = updater.dispatcher
+
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(MessageHandler(Filters.text, handle_message))
+
+
+    # Start the Bot
+    updater.start_polling()
+
+    updater.idle()
+    
+    
+            
+#----------------------------------------------------------------------------------
+
+def main(_):
+    if FLAGS.bleu > -1:
+        test_bleu(FLAGS.bleu)
+    elif FLAGS.test:
+        play()
+    else:
+        train()
+
+if __name__ == '__main__':
+    np.random.seed(0)
+    tf.set_random_seed(0)
+    tf.app.run()
