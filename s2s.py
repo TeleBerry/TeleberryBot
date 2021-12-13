@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-
+import requests
 import os
 import sys
 import math
@@ -15,14 +15,9 @@ import time
 import telepot
 from telepot.loop import MessageLoop
 from telepot.namedtuple import InlineKeyboardMarkup, InlineKeyboardButton
-
-
-import logging
-
-from telegram.ext import Updater, CommandHandler, MessageHandler
-from telegram.ext import Filters
-
+from telepot.namedtuple import ReplyKeyboardMarkup
 import mysql.connector
+
 
 tf.app.flags.DEFINE_float(
     'learning_rate',
@@ -282,48 +277,131 @@ def test():
                 break
 
 #play funvtion------------------------------------------------------------------------------
+db = mysql.connector.connect(
+  host = "111.235.254.229",
+  user = "10656008",
+  password = "yccycc0916",
+  database = "10656008",
+  port = "33066"
+  )
 
 def play():
     
-    #rule------------------------------------------------------------------------------
-  
+    #------------------------------------------------------------------------------
+    
+    #------------------------------------------------------------------------------
+    print("play mode")
+    class TestBucket(object):
+        def __init__(self, sentence):
+            self.sentence = sentence
+        def random(self):
+            return self.sentence, ''
 
-    def start(update, context):
-        """Send a message when the command /start is issued."""
-        update.message.reply_text('Hi!')
+    
 
+    with tf.Session() as sess:
+        #　構建模型
+        model = create_model(sess, True)
+        model.batch_size = 1
+        # 初始化變量
+        sess.run(tf.initialize_all_variables())
+        
+        ckpt =tf.train.get_checkpoint_state(FLAGS.model_dir)
+        model.saver.restore(sess,ckpt.model_checkpoint_path)
 
-   
-    def handle_message(update,context):
-        update.message.reply_text(f"you said {update.message.text}")
+        def sen(sentence):        
+            print("in sentence------------------------------------------------")
+            print(sentence)
+            bucket_id = min([
+                b for b in range(len(buckets))
+                if buckets[b][0] > len(sentence)
+            ])
+            data, _ = model.get_batch_data(
+                {bucket_id: TestBucket(sentence)},
+                bucket_id
+            )
+            encoder_inputs, decoder_inputs, decoder_weights = model.get_batch(
+                {bucket_id: TestBucket(sentence)},
+                bucket_id,
+                data
+            )
+            _, _, output_logits = model.step(
+                sess,
+                encoder_inputs,
+                decoder_inputs,
+                decoder_weights,
+                bucket_id,
+                True
+            )
+            outputs = [int(np.argmax(logit, axis=1)) for logit in output_logits]
+            ret = data_utils.indice_sentence(outputs)
+            return ret
 
+        def handle(msg):
+            sentence = msg['text']
+            print("in handle------------------------------------------------")
+            content_type, chat_type, chat_id = telepot.glance(msg)
+            print(content_type, chat_type, chat_id) 
+            print(f"{msg}------------------------------------------------")
+            
 
+                
+            if msg['text'] == '/start':
+                mark_up = ReplyKeyboardMarkup(
+                    keyboard=[['查詢設備當前狀況'], ['查詢設備歷史狀況']], one_time_keyboard=True)
+                bot.sendMessage(
+                    chat_id, text='歡迎來到 TeleBerry 機房監控系統\n請問有什麼可以幫的上忙嗎', reply_markup=mark_up)
+            elif msg['text'] == '查詢設備當前狀況':
+                mark_up = ReplyKeyboardMarkup(
+                    keyboard=[['A07'], ['A08']], one_time_keyboard=True)
+                bot.sendMessage(chat_id, '請輸入欲查詢的設備代號',reply_markup=mark_up)
+                
+
+            elif msg['text'] == '查詢設備歷史狀況':
+                bot.sendMessage(chat_id, 'order taken!')
+            elif msg['text'] == 'A07':
+                mycursor=db.cursor()
+                mycursor.execute('SELECT actor_id FROM `10656008`.actor where actor_id = 1;')
+                myresult = mycursor.fetchall()
+                bot.sendMessage(chat_id, myresult)
+            elif msg['text'] == 'A08':
+                mycursor=db.cursor()
+                mycursor.execute('SELECT actor_id FROM `10656008`.actor where actor_id = 2;')
+                myresult = mycursor.fetchall()
+                bot.sendMessage(chat_id, myresult)
+            else:
+                sen(sentence)
+                bot.sendMessage(chat_id, sentence)
+            
+            
+            
+            
+
+        TOKEN = '2142626601:AAGI4thiimWFzT4P6ynSfAJbjwDBU2UMcSI'
+        
+        bot = telepot.Bot(TOKEN)
+        
+        MessageLoop(bot, handle).run_as_thread()
+        
+        while 1:
+            time.sleep(10)
+        
+        
+        
 
 
     #執行bot------------------------------------------------------------------------------
 
-    updater = Updater("2142626601:AAGI4thiimWFzT4P6ynSfAJbjwDBU2UMcSI", use_context = True)
-
-
-    dp = updater.dispatcher
-
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(MessageHandler(Filters.text, handle_message))
-
-
-    # Start the Bot
-    updater.start_polling()
-
-    updater.idle()
     
+
+
+ 
     
             
 #----------------------------------------------------------------------------------
 
 def main(_):
-    if FLAGS.bleu > -1:
-        test_bleu(FLAGS.bleu)
-    elif FLAGS.test:
+    if FLAGS.test:
         play()
     else:
         train()
