@@ -91,7 +91,7 @@ def main(file_path):
     conn.commit()
 
 if __name__ == '__main__':
-    file_path = 'test.conv'
+    file_path = 'conversation.conv'
     if len(sys.argv) == 2:
         file_path = sys.argv[1]
     if not os.path.exists(file_path):
