@@ -17,6 +17,21 @@ from telepot.loop import MessageLoop
 from telepot.namedtuple import InlineKeyboardMarkup, InlineKeyboardButton
 from telepot.namedtuple import ReplyKeyboardMarkup
 import mysql.connector
+import datetime
+import json
+
+from telepot.namedtuple import InlineQueryResultArticle, InputTextMessageContent
+
+
+
+class DateEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, datetime.datetime):
+            return obj.strftime('%Y-%m-%d %H:%M:%S')
+        elif isinstance(obj, date):
+            return obj.strftime("%Y-%m-%d")
+        else:
+            return json.JSONEncoder.default(self, obj)
 
 
 tf.app.flags.DEFINE_float(
@@ -98,6 +113,7 @@ tf.app.flags.DEFINE_boolean(
 FLAGS = tf.app.flags.FLAGS
 buckets = data_utils.buckets
 
+
 def create_model(session, forward_only):
     """建立模型"""
     dtype = tf.float16 if FLAGS.use_fp16 else tf.float32
@@ -117,6 +133,7 @@ def create_model(session, forward_only):
     )
     return model
 
+# train-----------------------------------------------------------------------------------------
 def train():
     """訓練模型"""
     # 準備數據
@@ -191,7 +208,8 @@ def train():
                 batch_loss.append(step_loss)
                 time_now = time.time()
                 time_spend = time_now - time_start
-                time_estimate = time_spend / (epoch_trained / FLAGS.num_per_epoch)
+                time_estimate = time_spend / \
+                    (epoch_trained / FLAGS.num_per_epoch)
                 percent = min(100, epoch_trained / FLAGS.num_per_epoch) * 100
                 bars = math.floor(percent / 100 * bars_max)
                 sys.stdout.write(metrics.format(
@@ -203,113 +221,63 @@ def train():
                 ))
                 sys.stdout.flush()
                 if epoch_trained >= FLAGS.num_per_epoch:
-                    model.saver.save(sess, os.path.join(FLAGS.model_dir, FLAGS.model_name), global_step=epoch_index)
+                    model.saver.save(sess, os.path.join(
+                        FLAGS.model_dir, FLAGS.model_name), global_step=epoch_index)
                     break
             print('\n')
 
-        #if not os.path.exists(FLAGS.model_dir):
-        #    os.makedirs(FLAGS.model_dir)
-        #model.saver.save(sess, os.path.join(FLAGS.model_dir, FLAGS.model_name))
 
-
-
-
-
-def test():
-    print("test mode")
-    class TestBucket(object):
-        def __init__(self, sentence):
-            self.sentence = sentence
-        def random(self):
-            return sentence, ''
-    with tf.Session() as sess:
-        #　構建模型
-        model = create_model(sess, True)
-        model.batch_size = 1
-        # 初始化變量
-        sess.run(tf.initialize_all_variables())
-        
-        ckpt =tf.train.get_checkpoint_state(FLAGS.model_dir)
-        if ckpt == None or ckpt.model_checkpoint_path == None:
-            print('restore model fail')
-            return 
-
-        print('restore model file %s' % ckpt.model_checkpoint_path)
-        print(ckpt.model_checkpoint_path)
-        
-        model.saver.restore(sess,ckpt.model_checkpoint_path)
-        print("Input 'exit()' to exit test mode!")
-        sys.stdout.write("me > ")
-        sys.stdout.flush()
-        sentence = sys.stdin.readline()
-        if "exit()" in sentence:
-            sentence = False
-        while sentence:
-            bucket_id = min([
-                b for b in range(len(buckets))
-                if buckets[b][0] > len(sentence)
-            ])
-            data, _ = model.get_batch_data(
-                {bucket_id: TestBucket(sentence)},
-                bucket_id
-            )
-            encoder_inputs, decoder_inputs, decoder_weights = model.get_batch(
-                {bucket_id: TestBucket(sentence)},
-                bucket_id,
-                data
-            )
-            _, _, output_logits = model.step(
-                sess,
-                encoder_inputs,
-                decoder_inputs,
-                decoder_weights,
-                bucket_id,
-                True
-            )
-            outputs = [int(np.argmax(logit, axis=1)) for logit in output_logits]
-            ret = data_utils.indice_sentence(outputs)
-            print("AI >", ret)
-            print("me > ", end="")
-            sys.stdout.flush()
-            sentence = sys.stdin.readline()
-            
-            if "exit()" in sentence:
-                break
-
-#play funvtion------------------------------------------------------------------------------
+# connect db------------------------------------------------------------------------------
 db = mysql.connector.connect(
-  host = "111.235.254.229",
-  user = "10656008",
-  password = "yccycc0916",
-  database = "10656008",
-  port = "33066"
-  )
+    host="140.131.114.151",
+    user="teleberry03",
+    password="teleberry110503",
+    database="teleberry03",
+    port="3306",
+    buffered=True,
+)
 
+# play-----------------------------------------------------------------------------------------
 def play():
-    
-    #------------------------------------------------------------------------------
-    
-    #------------------------------------------------------------------------------
+    # push message-----------------------------------------------------------------------------------
+    # mycursor = db.cursor()
+    # mycursor.execute(
+    #     'SELECT cabnum FROM `teleberry03`.picmsg where statu = "1";')
+    # myresult = mycursor.fetchone()
+
+    # if myresult:
+
+    #     print(myresult)
+
+    #     r = requests.post(
+    #         f"https://api.telegram.org/bot2142626601:AAGI4thiimWFzT4P6ynSfAJbjwDBU2UMcSI/sendMessage",
+    #         json={
+    #             "chat_id": "1318965520",
+    #             "text": "!!!紅色警戒!!!\n" + str(myresult[0]) + "機櫃發生異常",
+    #         })
+    # ------------------------------------------------------------------------------
+
     print("play mode")
+
     class TestBucket(object):
         def __init__(self, sentence):
             self.sentence = sentence
+
         def random(self):
             return self.sentence, ''
 
-    
-
     with tf.Session() as sess:
         #　構建模型
         model = create_model(sess, True)
         model.batch_size = 1
         # 初始化變量
         sess.run(tf.initialize_all_variables())
-        
-        ckpt =tf.train.get_checkpoint_state(FLAGS.model_dir)
-        model.saver.restore(sess,ckpt.model_checkpoint_path)
 
-        def sen(sentence):        
+        ckpt = tf.train.get_checkpoint_state(FLAGS.model_dir)
+        model.saver.restore(sess, ckpt.model_checkpoint_path)
+
+    # sen-----------------------------------------------------------------------------------------
+        def sen(sentence):
             print("in sentence------------------------------------------------")
             print(sentence)
             bucket_id = min([
@@ -333,78 +301,108 @@ def play():
                 bucket_id,
                 True
             )
-            outputs = [int(np.argmax(logit, axis=1)) for logit in output_logits]
+            outputs = [int(np.argmax(logit, axis=1))
+                       for logit in output_logits]
             ret = data_utils.indice_sentence(outputs)
             return ret
 
+        
+    # handle-----------------------------------------------------------------------------------------
         def handle(msg):
             sentence = msg['text']
             print("in handle------------------------------------------------")
             content_type, chat_type, chat_id = telepot.glance(msg)
-            print(content_type, chat_type, chat_id) 
+            print(content_type, chat_type, chat_id)
             print(f"{msg}------------------------------------------------")
-            
 
-                
             if msg['text'] == '/start':
+                bot.sendMessage(
+                    chat_id, text='歡迎來到 TeleBerry 機房監控系統!\n輸入/check查詢設備狀態，或是輸入任意文字跟我聊天~')
+            elif msg['text'] == '/check':
                 mark_up = ReplyKeyboardMarkup(
                     keyboard=[['查詢設備當前狀況'], ['查詢設備歷史狀況']], one_time_keyboard=True)
                 bot.sendMessage(
-                    chat_id, text='歡迎來到 TeleBerry 機房監控系統\n請問有什麼可以幫的上忙嗎', reply_markup=mark_up)
+                    chat_id, text='請選擇當前查詢或歷史查詢', reply_markup=mark_up)
             elif msg['text'] == '查詢設備當前狀況':
                 mark_up = ReplyKeyboardMarkup(
                     keyboard=[['A07'], ['A08']], one_time_keyboard=True)
-                bot.sendMessage(chat_id, '請輸入欲查詢的設備代號',reply_markup=mark_up)
-                
+                bot.sendMessage(chat_id, '請輸入欲查詢的設備代號', reply_markup=mark_up)
 
+        # 歷史-----------------------------------------------------------------------------------------
             elif msg['text'] == '查詢設備歷史狀況':
-                bot.sendMessage(chat_id, 'order taken!')
+                mark_up = ReplyKeyboardMarkup(
+                    keyboard=[['A07歷史'], ['A08歷史']], one_time_keyboard=True)
+                bot.sendMessage(chat_id, '請輸入欲查詢的設備代號', reply_markup=mark_up)
+
+            elif msg['text'] == 'A07歷史':
+                mycursor = db.cursor()
+                json.dumps(mycursor.execute(
+                    'SELECT time FROM `teleberry03`.picmsg where cabnum = "A07";'), cls=DateEncoder)
+                myresult = mycursor.fetchall()
+
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=json.dumps((myresult[0]), cls=DateEncoder), callback_data="a")],
+                    [InlineKeyboardButton(text=json.dumps((myresult[1]), cls=DateEncoder), callback_data="b")],
+                ])
+                bot.sendMessage(chat_id, '請從下方選擇欲查詢的日期', reply_markup=keyboard)
+                
+            elif msg['text'] == 'A08歷史':
+                mycursor = db.cursor()
+                json.dumps(mycursor.execute(
+                    'SELECT time FROM `teleberry03`.picmsg where cabnum = "A08";'), cls=DateEncoder)
+                myresult = mycursor.fetchall()
+
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=json.dumps((myresult[0]), cls=DateEncoder), callback_data="a")],
+                    [InlineKeyboardButton(text=json.dumps((myresult[1]), cls=DateEncoder), callback_data="b")],
+                ])
+                bot.sendMessage(chat_id, '請從下方選擇欲查詢的日期', reply_markup=keyboard)
+
+                
+        # 當前-----------------------------------------------------------------------------------------
             elif msg['text'] == 'A07':
-                mycursor=db.cursor()
-                mycursor.execute('SELECT actor_id FROM `10656008`.actor where actor_id = 1;')
-                myresult = mycursor.fetchall()
-                bot.sendMessage(chat_id, myresult)
+                mycursor = db.cursor()
+                mycursor.execute(
+                    'SELECT statu FROM `teleberry03`.picmsg where cabnum = "A07" order by time desc;')
+                myresult = mycursor.fetchone()
+                bot.sendMessage(chat_id, "A07當前機櫃狀態為" +
+                                str(myresult[0])+" "+"(1為異常，0為正常)")
             elif msg['text'] == 'A08':
-                mycursor=db.cursor()
-                mycursor.execute('SELECT actor_id FROM `10656008`.actor where actor_id = 2;')
-                myresult = mycursor.fetchall()
-                bot.sendMessage(chat_id, myresult)
+                mycursor = db.cursor()
+                mycursor.execute(
+                    'SELECT statu FROM `teleberry03`.picmsg where cabnum = "A08" order by time desc;')
+                myresult = mycursor.fetchone()
+                bot.sendMessage(chat_id, "A08當前機櫃狀態為" +
+                                str(myresult[0])+" "+"(1為異常，0為正常)")
+
+            elif msg['text'] == '/click':
+                bot.sendMessage(
+                    chat_id, "https://orteil.dashnet.org/cookieclicker/")
+
+        # 日常-----------------------------------------------------------------------------------------
             else:
                 sen(sentence)
-                bot.sendMessage(chat_id, sentence)
-            
-            
-            
-            
 
+                bot.sendMessage(chat_id, sen(sentence))
+    # run bot-----------------------------------------------------------------------------------------
         TOKEN = '2142626601:AAGI4thiimWFzT4P6ynSfAJbjwDBU2UMcSI'
-        
+
         bot = telepot.Bot(TOKEN)
-        
+
         MessageLoop(bot, handle).run_as_thread()
-        
+
         while 1:
             time.sleep(10)
-        
-        
-        
 
 
-    #執行bot------------------------------------------------------------------------------
-
-    
-
-
- 
-    
-            
-#----------------------------------------------------------------------------------
+# 執行程式-----------------------------------------------------------------------------------------
 
 def main(_):
     if FLAGS.test:
         play()
     else:
         train()
+
 
 if __name__ == '__main__':
     np.random.seed(0)
